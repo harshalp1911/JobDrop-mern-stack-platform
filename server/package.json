@@ -1,23 +1,28 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "description": "",
+  "description": "JobDrop – MERN Job‐Match API Server",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
-    "dev":   "nodemon index.js"
-
+    "dev": "nodemon index.js"
   },
-  "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
+    "axios": "^1.9.0",                
+    "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
-    "mongoose": "^8.15.0"
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^8.15.0",
+    "multer": "^1.4.5-lts.1",
+    "mammoth": "^1.4.28",
+    "passport": "^0.6.0",
+    "passport-google-oauth20": "^2.0.0",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "eslint": "^9.27.0",
