@@ -240,12 +240,15 @@ app.get('/api/jobs', auth, async (req, res) => {
 // … your existing /api/favorites POST, GET, DELETE …
 
 // ─── Start server ─────────────────────────────────────────────────────────────
+const port = process.env.PORT || 4000;
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
     console.log('✅ Mongo connected');
-    app.listen(process.env.PORT, () =>
-      console.log(`🚀 Server running at http://localhost:${process.env.PORT}`)
-    );
+    app.listen(port, () => {
+      console.log(`🚀 Server listening on port ${port}`);
+    });
   })
-  .catch(err => console.error('❌ Mongo connection error:', err));
+  .catch(err => {
+    console.error('❌ Mongo connection error:', err);
+  });
