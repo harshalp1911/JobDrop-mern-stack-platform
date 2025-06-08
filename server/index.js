@@ -22,31 +22,35 @@ const { fetchJobs } = require('./services/jobAggregator');
 
 const app = express();
 
-/** ─── App-wide Middleware ───────────────────────────────────────────── */
+// ─── Ensure uploads folder exists on startup ───────────────────────────────
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+fs.mkdir(UPLOAD_DIR, { recursive: true }).catch(err =>
+  console.error('❌ Failed to create uploads dir:', err)
+);
+
+// ─── App-wide Middleware ───────────────────────────────────────────────────
 app.use(
   cors({
-    origin:      process.env.FRONTEND_URL,  // e.g. https://jobdrop-frontend.onrender.com
+    origin:      process.env.FRONTEND_URL,
     credentials: true,
   })
 );
 app.use(cookieParser());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(UPLOAD_DIR));
 
-/** ─── Multer (file upload) ──────────────────────────────────────────── */
+// ─── Multer (file upload) ─────────────────────────────────────────────────
 const storage = multer.diskStorage({
-  destination: (req, file, cb) =>
-    cb(null, path.join(__dirname, 'uploads')),
-  filename: (req, file, cb) =>
-    cb(null, `${Date.now()}-${file.originalname}`)
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename:    (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
 });
-const fileFilter = (req, file, cb) => {
+const fileFilter = (_req, file, cb) => {
   const ok = /\.(pdf|docx|txt)$/i.test(file.originalname);
   cb(ok ? null : new Error('Invalid file type'), ok);
 };
 const upload = multer({ storage, fileFilter });
 
-/** ─── Passport Google OAuth ─────────────────────────────────────────── */
+// ─── Passport Google OAuth ────────────────────────────────────────────────
 passport.use(
   new GoogleStrategy(
     {
@@ -54,7 +58,7 @@ passport.use(
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       callbackURL:  `${process.env.SERVER_URL}/auth/google/callback`,
     },
-    async (accessToken, refreshToken, profile, done) => {
+    async (accessToken, _refreshToken, profile, done) => {
       try {
         let user = await User.findOne({ googleId: profile.id });
         if (!user) {
@@ -73,7 +77,7 @@ passport.use(
 );
 app.use(passport.initialize());
 
-/** ─── Helper: bucket experience ──────────────────────────────────────── */
+// ─── Helper: bucket experience ─────────────────────────────────────────────
 function categorizeExp(raw = '') {
   const s = raw.toString().toLowerCase();
   if (!s || s.startsWith('0')) return 'fresher';
@@ -82,7 +86,7 @@ function categorizeExp(raw = '') {
   return 'experienced';
 }
 
-/** ─── Routes ───────────────────────────────────────────────────────────*/
+// ─── Routes ────────────────────────────────────────────────────────────────
 
 // 1) Google OAuth kickoff
 app.get(
@@ -104,20 +108,20 @@ app.get(
       .cookie('token', token, {
         httpOnly: true,
         secure:   process.env.NODE_ENV === 'production',
-        sameSite: 'none',         // ← allow cross-site cookie
-        path:     '/',  
+        sameSite: 'none',
+        path:     '/',
       })
       .redirect(process.env.FRONTEND_URL);
   }
 );
 
-// 2.5) Logout route → clears the JWT cookie
+// 2.5) Logout → clear cookie
 app.post('/auth/logout', (_req, res) => {
   res
     .clearCookie('token', {
       httpOnly: true,
       secure:   process.env.NODE_ENV === 'production',
-      sameSite: 'none',         // ← match the sameSite setting
+      sameSite: 'none',
       path:     '/',
     })
     .json({ message: 'Logged out' });
@@ -130,31 +134,35 @@ app.get('/api/health', (_req, res) =>
 
 // 4) Profile (protected)
 app.get('/api/profile', auth, async (req, res) => {
-  const user = await User.findById(req.user.id)
-    .select('-googleId -__v');
+  const user = await User.findById(req.user.id).select('-googleId -__v');
   res.json({
-    name:     user.name,
-    email:    user.email,
-    favorites: user.favorites || []
+    name:      user.name,
+    email:     user.email,
+    favorites: user.favorites || [],
   });
 });
 
-// 5) Upload résumé (protected)
+// 5) Upload résumé (protected) ← wrapped in try/catch to surface errors
 app.post(
   '/api/resumes',
   auth,
   upload.single('resume'),
   async (req, res) => {
-    const fileUrl = `${process.env.SERVER_URL.replace(/\/$/, '')}/uploads/${
-      req.file.filename
-    }`;
-    const doc = await Resume.create({
-      user:         req.user.id,
-      url:          fileUrl,
-      originalName: req.file.originalname,
-      mimeType:     req.file.mimetype,
-    });
-    res.json(doc);
+    try {
+      // build file URL and save
+      const fileUrl = `${process.env.SERVER_URL.replace(/\/$/, '')}/uploads/${req.file.filename}`;
+      const doc = await Resume.create({
+        user:         req.user.id,
+        url:          fileUrl,
+        originalName: req.file.originalname,
+        mimeType:     req.file.mimetype,
+      });
+      return res.json(doc);
+
+    } catch (err) {
+      console.error('🛑 Upload/Analyze error:', err);
+      return res.status(500).json({ error: err.message, stack: err.stack });
+    }
   }
 );
 
@@ -167,12 +175,8 @@ app.get('/api/resumes/:id/text', auth, async (req, res) => {
     return res.json({ text: resume.parsedText });
   }
 
-  const filePath = path.join(
-    __dirname,
-    'uploads',
-    path.basename(resume.url)
-  );
-  const buffer = await fs.readFile(filePath);
+  const filePath = path.join(UPLOAD_DIR, path.basename(resume.url));
+  const buffer   = await fs.readFile(filePath);
   let text = '';
   const ext = path.extname(resume.originalName).toLowerCase();
 
@@ -189,7 +193,7 @@ app.get('/api/resumes/:id/text', auth, async (req, res) => {
   res.json({ text });
 });
 
-// 7) Zero-shot domain classification (protected)
+// 7) Zero-shot classification (protected)
 app.post('/api/classify', auth, async (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: 'No text provided' });
@@ -197,15 +201,14 @@ app.post('/api/classify', auth, async (req, res) => {
   try {
     const hfRes = await axios.post(
       'https://api-inference.huggingface.co/models/facebook/bart-large-mnli',
-      { inputs: text, parameters: { candidate_labels: [
+      {
+        inputs:     text,
+        parameters: { candidate_labels: [
           'AI/ML','SDE','Front-end','Full-Stack Developer','Backend Developer'
-        ] } 
+        ] }
       },
       {
-        headers: {
-          Authorization: `Bearer ${process.env.HF_API_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { Authorization: `Bearer ${process.env.HF_API_TOKEN}` },
         timeout: 60000,
       }
     );
@@ -224,21 +227,17 @@ app.post('/api/classify', auth, async (req, res) => {
 
 // 8) Search jobs + filters (protected)
 app.get('/api/jobs', auth, async (req, res) => {
-  const domains          = (req.query.domains          || '').split(',').filter(Boolean);
-  const location         = req.query.location          || 'India';
-  const postedWithin     = req.query.postedWithin      || '7d';
-  const jobTypes         = (req.query.jobTypes         || 'fulltime').split(',').filter(Boolean);
-  const expLevels        = (req.query.experienceLevels || '').split(',').filter(Boolean);
+  const domains      = (req.query.domains          || '').split(',').filter(Boolean);
+  const location     = req.query.location          || 'India';
+  const postedWithin = req.query.postedWithin      || '7d';
+  const jobTypes     = (req.query.jobTypes         || 'fulltime').split(',').filter(Boolean);
+  const expLevels    = (req.query.experienceLevels || '').split(',').filter(Boolean);
 
   try {
     let jobs = await fetchJobs(domains, location, postedWithin, jobTypes);
-
     if (expLevels.length) {
-      jobs = jobs.filter(j =>
-        expLevels.includes(categorizeExp(j.experience))
-      );
+      jobs = jobs.filter(j => expLevels.includes(categorizeExp(j.experience)));
     }
-
     res.json({ jobs });
   } catch (err) {
     console.error('Job fetch error:', err.response?.status, err.response?.data);
@@ -249,14 +248,12 @@ app.get('/api/jobs', auth, async (req, res) => {
 // 9–11) Favorites CRUD (protected)
 // … your existing favorites routes …
 
-/** ─── Start server ───────────────────────────────────────────────────── */
+// ─── Start server ─────────────────────────────────────────────────────────
 const port = process.env.PORT || 4000;
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
     console.log('✅ Mongo connected');
-    app.listen(port, () =>
-      console.log(`🚀 Server listening on port ${port}`)
-    );
+    app.listen(port, () => console.log(`🚀 Server listening on port ${port}`));
   })
   .catch(err => console.error('❌ Mongo connection error:', err));
