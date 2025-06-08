@@ -2,6 +2,8 @@
 
 **Full-Stack Job Aggregator & Résumé Analyzer**
 
+- **Live Demo:** [jobdrop-frontend.onrender.com](https://jobdrop-frontend.onrender.com)
+
 JobDrop is a MERN-stack application that enables users to:
 
 - 📝 **Upload & parse résumés** (PDF/DOCX/TXT) into raw text  
