@@ -57,6 +57,19 @@ JobDrop is a MERN-stack application that enables users to:
 - **Deployment:** Render (both API & static frontend)  
 
 ---
+## 📸 Screenshots 
+   <table>
+     <tr>
+       <td><img src="/Screenshot/img1.png" alt="Upload and Analyze Screen" width="500"/></td>
+       <td><img src="/Screenshot/img2.png" alt="Text parsing " width="500"/></td>
+     </tr>
+      <tr>
+          <td><img src="/Screenshot/img3.png" alt="Filters" width="500"/></td>
+          <td><img src="/Screenshot/img4.png" alt="Find button" width="500"/></td>
+      </tr>
+   </table>
+---
+
 ## 📦 Installation
 
 1. **Clone repository**  
@@ -89,7 +102,7 @@ JobDrop is a MERN-stack application that enables users to:
     # Edit .env:
     # REACT_APP_API_URL=https://your-backend-url
     npm run start
----
+    
 ## 🏗️ Architecture Overview
     ```bash
     [React Frontend] ←→ [Express API] ←→ [MongoDB]
@@ -122,4 +135,13 @@ JobDrop is a MERN-stack application that enables users to:
 ===========
 
 Copyright (c) 2025 Harshal Patil
+
+## Get in Touch
+If you have any questions, feedback, or just want to say hi, feel free to reach out:
+
+- **Email:** harshalp0602@gmail.com  
+- **LinkedIn:** [linkedin.com/in/harshal-patil](https://www.linkedin.com/in/harshalp0011/)
+- **GitHub:** [github.com/harshalp1911](https://github.com/harshalp1911)  
+
+I’m always open to discussing new projects, ideas, or opportunities!  
 
