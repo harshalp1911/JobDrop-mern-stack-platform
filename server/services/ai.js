@@ -4,14 +4,105 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
+const MODEL = 'llama-3.3-70b-versatile';
+
 // Helper to extract JSON from AI responses that may contain markdown code blocks
 function parseJSON(text) {
-  let cleaned = text.trim();
+  let cleaned = (text || '').trim();
   // Remove markdown code blocks like ```json ... ```
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
   }
+  // Fall back to the outermost {...} if the model added text around it
+  if (!cleaned.startsWith('{')) {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start !== -1 && end > start) cleaned = cleaned.slice(start, end + 1);
+  }
   return JSON.parse(cleaned);
+}
+
+// Ask for a JSON object (Groq JSON mode) and retry once if it can't be parsed
+async function completeJSON(prompt, temperature) {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const completion = await groq.chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        model: MODEL,
+        temperature,
+        response_format: { type: 'json_object' },
+      });
+      return parseJSON(completion.choices[0]?.message?.content);
+    } catch (error) {
+      lastError = error;
+      console.warn(`AI JSON attempt ${attempt} failed:`, error.message);
+    }
+  }
+  throw lastError;
+}
+
+// Plain-text completion that never returns an empty string
+async function completeText(prompt, temperature) {
+  const completion = await groq.chat.completions.create({
+    messages: [{ role: 'user', content: prompt }],
+    model: MODEL,
+    temperature,
+  });
+  const text = completion.choices[0]?.message?.content?.trim();
+  if (!text) throw new Error('AI returned an empty response');
+  return text;
+}
+
+const toStringArray = (value) =>
+  Array.isArray(value) ? value.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim()) : [];
+
+const toText = (value) => (typeof value === 'string' ? value.trim() : '');
+
+const toScore = (value) => {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+};
+
+const EXPERIENCE_LEVELS = ['fresher', 'junior', 'mid', 'senior'];
+const RATINGS = ['strong', 'good', 'average', 'weak'];
+
+// Coerce the model's resume analysis into the shape the app expects
+function normalizeAnalysis(raw) {
+  const experience = toText(raw?.experience).toLowerCase();
+  return {
+    summary: toText(raw?.summary),
+    skills: toStringArray(raw?.skills),
+    experience: EXPERIENCE_LEVELS.includes(experience) ? experience : 'junior',
+    bestFitRole: toText(raw?.bestFitRole) || 'Software Developer',
+    strengths: toStringArray(raw?.strengths),
+    improvements: toStringArray(raw?.improvements),
+  };
+}
+
+// Coerce the model's feedback into the shape the app expects
+function normalizeFeedback(raw) {
+  const breakdown = Array.isArray(raw?.questionBreakdown) ? raw.questionBreakdown : [];
+  return {
+    overallScore: toScore(raw?.overallScore),
+    technicalScore: toScore(raw?.technicalScore),
+    communicationScore: toScore(raw?.communicationScore),
+    summary: toText(raw?.summary),
+    strengths: toStringArray(raw?.strengths),
+    improvements: toStringArray(raw?.improvements),
+    questionBreakdown: breakdown
+      .filter((q) => q && typeof q === 'object')
+      .map((q) => {
+        const rating = toText(q.rating).toLowerCase();
+        return {
+          question: toText(q.question),
+          userAnswer: toText(q.userAnswer),
+          rating: RATINGS.includes(rating) ? rating : 'average',
+          feedback: toText(q.feedback),
+        };
+      })
+      .filter((q) => q.question),
+  };
 }
 
 // Analyze resume text and return structured analysis
@@ -31,14 +122,7 @@ Analyze this resume:
 
 ${resumeText}`;
 
-  const completion = await groq.chat.completions.create({
-    messages: [{ role: 'user', content: prompt }],
-    model: 'llama-3.3-70b-versatile',
-    temperature: 0.3,
-  });
-  
-  const content = completion.choices[0].message.content;
-  return parseJSON(content);
+  return normalizeAnalysis(await completeJSON(prompt, 0.3));
 }
 
 // Generate the first interview question
@@ -55,13 +139,7 @@ Start the interview naturally. Greet the candidate by name, make them comfortabl
 
 Keep your response to 2-3 sentences max.`;
 
-  const completion = await groq.chat.completions.create({
-    messages: [{ role: 'user', content: prompt }],
-    model: 'llama-3.3-70b-versatile',
-    temperature: 0.7,
-  });
-  
-  return completion.choices[0].message.content;
+  return completeText(prompt, 0.7);
 }
 
 // Generate next interview question based on conversation history
@@ -93,13 +171,7 @@ ${conversationText}
 
 Generate your next response as the interviewer:`;
 
-  const completion = await groq.chat.completions.create({
-    messages: [{ role: 'user', content: prompt }],
-    model: 'llama-3.3-70b-versatile',
-    temperature: 0.7,
-  });
-  
-  return completion.choices[0].message.content;
+  return completeText(prompt, 0.7);
 }
 
 // Generate interview feedback
@@ -132,14 +204,7 @@ Return ONLY valid JSON, no markdown.
 Interview conversation:
 ${conversationText}`;
 
-  const completion = await groq.chat.completions.create({
-    messages: [{ role: 'user', content: prompt }],
-    model: 'llama-3.3-70b-versatile',
-    temperature: 0.3,
-  });
-  
-  const content = completion.choices[0].message.content;
-  return parseJSON(content);
+  return normalizeFeedback(await completeJSON(prompt, 0.3));
 }
 
 module.exports = {
