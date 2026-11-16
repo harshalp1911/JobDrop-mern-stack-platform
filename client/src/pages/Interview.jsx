@@ -42,6 +42,8 @@ export default function Interview() {
   const [started, setStarted] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [ended, setEnded] = useState(false);
+  const [endError, setEndError] = useState('');
+  const endingRef = useRef(false);
 
   const [aiCaption, setAiCaption] = useState('');
   const [userCaption, setUserCaption] = useState('');
@@ -290,6 +292,8 @@ export default function Interview() {
       });
     } catch (err) {
       console.error('Failed to start:', err);
+      // e.g. 409 if it was already started in another tab: reload its real state
+      if (err.response?.status === 409) fetchInterview();
     } finally {
       setLoading(false);
     }
@@ -332,6 +336,7 @@ export default function Interview() {
       setMessages((prev) => [...prev, aiMsg]);
 
       if (res.data.isComplete) {
+        endingRef.current = true; // server already finished it; skip /end
         setEnded(true);
         speak(res.data.message, () => {
           setTimeout(() => navigate(`/interview/${id}/feedback`), 2000);
@@ -374,7 +379,10 @@ export default function Interview() {
   };
 
   const handleEndInterview = async () => {
-    if (ended) return;
+    // A ref, not state, so the timer and the button can't both fire it
+    if (endingRef.current) return;
+    endingRef.current = true;
+    setEndError('');
     setEnded(true);
     stopListening();
     window.speechSynthesis.cancel();
@@ -390,6 +398,9 @@ export default function Interview() {
       navigate(`/interview/${id}/feedback`);
     } catch (err) {
       console.error('Failed to end:', err);
+      // Let the user retry instead of leaving them on a dead screen
+      endingRef.current = false;
+      setEndError(err.response?.data?.message || 'Could not end the interview. Check your connection and try again.');
     }
   };
 
@@ -557,6 +568,19 @@ export default function Interview() {
           </div>
         )}
       </div>
+
+      {/* Ending failed: offer a retry */}
+      {ended && endError && (
+        <div className="flex flex-col items-center gap-3 px-6 py-5 bg-black/30">
+          <p className="text-red-300 text-sm text-center">{endError}</p>
+          <button
+            onClick={handleEndInterview}
+            className="px-6 py-2.5 rounded-full bg-red-500 hover:bg-red-400 text-white text-sm font-medium"
+          >
+            Try Again
+          </button>
+        </div>
+      )}
 
       {/* Bottom Controls */}
       {!ended && (

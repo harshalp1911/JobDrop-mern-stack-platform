@@ -81,7 +81,8 @@ export default function Feedback() {
       const data = res.data.interview;
       setInterview(data);
 
-      if (data.feedback?.overallScore) {
+      // generatedAt (not the score) marks saved feedback; a score of 0 is valid
+      if (data.feedback?.generatedAt) {
         setFeedback(data.feedback);
       }
     } catch (err) {
