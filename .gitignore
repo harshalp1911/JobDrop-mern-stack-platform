@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Environment files (secrets)
+.env
+.env.local
+
+# Build output
+dist/
+
+# Uploaded files (no longer used, kept out just in case)
+server/uploads/*
+!server/uploads/.gitkeep
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.log
