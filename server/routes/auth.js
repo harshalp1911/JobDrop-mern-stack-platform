@@ -8,6 +8,10 @@ const auth = require('../middleware/auth');
 const router = express.Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 6;
+const MAX_PASSWORD_LENGTH = 72; // bcrypt ignores anything past 72 bytes
+
 const generateToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
 };
@@ -15,10 +19,23 @@ const generateToken = (userId) => {
 // Register
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+    const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const { password } = req.body;
 
-    if (!name || !email || !password) {
+    if (!name || !email || typeof password !== 'string' || !password) {
       return res.status(400).json({ message: 'All fields are required' });
+    }
+    if (name.length > 100) {
+      return res.status(400).json({ message: 'Name must be 100 characters or fewer' });
+    }
+    if (!EMAIL_PATTERN.test(email)) {
+      return res.status(400).json({ message: 'Please enter a valid email address' });
+    }
+    if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        message: `Password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} characters`,
+      });
     }
 
     const existingUser = await User.findOne({ email });
@@ -58,9 +75,10 @@ router.post('/register', async (req, res) => {
 // Login
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const { password } = req.body;
 
-    if (!email || !password) {
+    if (!email || typeof password !== 'string' || !password) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 

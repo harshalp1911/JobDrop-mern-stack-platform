@@ -1,11 +1,13 @@
 const express = require('express');
 const pdfParse = require('pdf-parse');
 const auth = require('../middleware/auth');
+const validateObjectId = require('../middleware/validateObjectId');
 const uploadResume = require('../config/multer');
 const Resume = require('../models/Resume');
 const { analyzeResume } = require('../services/ai');
 
 const router = express.Router();
+router.param('id', validateObjectId);
 
 // Upload resume
 router.post('/upload', auth, uploadResume, async (req, res) => {
