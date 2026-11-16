@@ -70,6 +70,7 @@ const interviewSchema = new mongoose.Schema({
       rating: String,
       feedback: String,
     }],
+    generatedAt: { type: Date, default: null },
   },
 }, { timestamps: true });
 

@@ -1,10 +1,29 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const auth = require('../middleware/auth');
 const Interview = require('../models/Interview');
 const Resume = require('../models/Resume');
+const validateObjectId = require('../middleware/validateObjectId');
 const { startInterview, getNextQuestion, generateFeedback } = require('../services/ai');
 
 const router = express.Router();
+router.param('id', validateObjectId);
+
+const LEVELS = Interview.schema.path('level').options.enum;
+const DURATIONS = Interview.schema.path('duration').options.enum;
+const TYPES = Interview.schema.path('type').options.enum;
+
+// Small allowance for network latency when deciding whether time ran out
+const TIME_UP_GRACE_MS = 5 * 1000;
+
+const msRemaining = (interview) =>
+  interview.startedAt
+    ? interview.startedAt.getTime() + interview.duration * 60 * 1000 - Date.now()
+    : interview.duration * 60 * 1000;
+
+const isTimeUp = (interview) => msRemaining(interview) <= TIME_UP_GRACE_MS;
+
+const TIME_UP_MESSAGE = "We've run out of time. Thank you for the interview! Let me prepare your feedback.";
 
 // Create a new interview session
 router.post('/create', auth, async (req, res) => {
@@ -13,6 +32,18 @@ router.post('/create', auth, async (req, res) => {
 
     if (!resumeId || !level || !duration) {
       return res.status(400).json({ message: 'Resume, level, and duration are required' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(resumeId)) {
+      return res.status(400).json({ message: 'Invalid resume' });
+    }
+    if (!LEVELS.includes(level)) {
+      return res.status(400).json({ message: `Level must be one of: ${LEVELS.join(', ')}` });
+    }
+    if (!DURATIONS.includes(Number(duration))) {
+      return res.status(400).json({ message: `Duration must be one of: ${DURATIONS.join(', ')} minutes` });
+    }
+    if (type && !TYPES.includes(type)) {
+      return res.status(400).json({ message: `Type must be one of: ${TYPES.join(', ')}` });
     }
 
     const resume = await Resume.findOne({ _id: resumeId, user: req.user._id });
@@ -24,7 +55,7 @@ router.post('/create', auth, async (req, res) => {
       user: req.user._id,
       resume: resumeId,
       level,
-      duration,
+      duration: Number(duration),
       type: type || 'mixed',
       status: 'setup',
     });
@@ -53,6 +84,10 @@ router.post('/:id/start', auth, async (req, res) => {
     const interview = await Interview.findOne({ _id: req.params.id, user: req.user._id });
     if (!interview) {
       return res.status(404).json({ message: 'Interview not found' });
+    }
+    // Starting twice would reset the clock and add a second greeting
+    if (interview.status !== 'setup') {
+      return res.status(409).json({ message: 'This interview has already been started' });
     }
 
     const resume = await Resume.findById(interview.resume);
@@ -96,7 +131,7 @@ router.post('/:id/respond', auth, async (req, res) => {
   try {
     const { userMessage } = req.body;
 
-    if (!userMessage) {
+    if (typeof userMessage !== 'string' || !userMessage.trim()) {
       return res.status(400).json({ message: 'Response is required' });
     }
 
@@ -113,25 +148,24 @@ router.post('/:id/respond', auth, async (req, res) => {
     // Add user message to conversation
     interview.conversation.push({
       role: 'user',
-      content: userMessage,
+      content: userMessage.trim().slice(0, 5000),
     });
 
-    // Calculate remaining time
-    const elapsed = (Date.now() - interview.startedAt.getTime()) / 1000 / 60;
-    const timeRemaining = Math.max(0, interview.duration - elapsed);
-
-    // Check if time is up
-    if (timeRemaining <= 0) {
+    // The server's clock is the source of truth for the time limit
+    if (isTimeUp(interview)) {
+      interview.conversation.push({ role: 'ai', content: TIME_UP_MESSAGE });
       interview.status = 'completed';
       interview.endedAt = new Date();
       await interview.save();
 
       return res.json({
-        message: "We've run out of time. Thank you for the interview! Let me prepare your feedback.",
+        message: TIME_UP_MESSAGE,
         isComplete: true,
         interviewId: interview._id,
       });
     }
+
+    const timeRemaining = Math.max(0, msRemaining(interview) / 1000 / 60);
 
     // Get next AI question
     const aiResponse = await getNextQuestion(
@@ -160,7 +194,7 @@ router.post('/:id/respond', auth, async (req, res) => {
   }
 });
 
-// End interview early
+// End the interview (user hung up, or the client timer ran out)
 router.post('/:id/end', auth, async (req, res) => {
   try {
     const interview = await Interview.findOne({ _id: req.params.id, user: req.user._id });
@@ -168,13 +202,20 @@ router.post('/:id/end', auth, async (req, res) => {
       return res.status(404).json({ message: 'Interview not found' });
     }
 
-    interview.status = 'ended_early';
-    interview.endedAt = new Date();
-    await interview.save();
+    // Already finished: don't overwrite the original outcome
+    if (interview.status === 'setup' || interview.status === 'in_progress') {
+      // The server decides whether the full time was used, not the client
+      interview.status = interview.status === 'in_progress' && isTimeUp(interview)
+        ? 'completed'
+        : 'ended_early';
+      interview.endedAt = new Date();
+      await interview.save();
+    }
 
     res.json({
       message: 'Interview ended',
       interviewId: interview._id,
+      status: interview.status,
     });
   } catch (error) {
     res.status(500).json({ message: 'Failed to end interview' });
@@ -189,7 +230,16 @@ router.post('/:id/feedback', auth, async (req, res) => {
       return res.status(404).json({ message: 'Interview not found' });
     }
 
-    if (interview.conversation.length < 2) {
+    // Feedback is generated once; later visits get the saved result
+    if (interview.feedback?.generatedAt) {
+      return res.json({ feedback: interview.feedback });
+    }
+
+    if (interview.status === 'setup') {
+      return res.status(400).json({ message: 'This interview has not been started' });
+    }
+
+    if (!interview.conversation.some((m) => m.role === 'user')) {
       return res.status(400).json({ message: 'Not enough conversation to generate feedback' });
     }
 
@@ -203,14 +253,14 @@ router.post('/:id/feedback', auth, async (req, res) => {
       interview.level
     );
 
-    interview.feedback = feedback;
+    interview.feedback = { ...feedback, generatedAt: new Date() };
     if (interview.status === 'in_progress') {
       interview.status = 'completed';
       interview.endedAt = new Date();
     }
     await interview.save();
 
-    res.json({ feedback });
+    res.json({ feedback: interview.feedback });
   } catch (error) {
     console.error('Feedback error:', error);
     res.status(500).json({ message: 'Failed to generate feedback' });
