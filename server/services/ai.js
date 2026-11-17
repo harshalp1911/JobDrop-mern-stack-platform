@@ -1,4 +1,5 @@
 const Groq = require('groq-sdk');
+const { HttpError } = require('../middleware/errorHandler');
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
@@ -22,6 +23,19 @@ function parseJSON(text) {
   return JSON.parse(cleaned);
 }
 
+// Turn Groq SDK failures (rate limit, outage, bad key) into a clear 502/503
+// for the user; the original error is logged by the caller's error handler.
+function toAIError(error) {
+  if (error instanceof Groq.APIError) {
+    console.error('Groq API error:', error.status, error.message);
+    if (error.status === 429) {
+      return new HttpError(503, 'The AI is busy right now. Please try again in a minute');
+    }
+    return new HttpError(502, 'The AI service is unavailable. Please try again');
+  }
+  return error;
+}
+
 // Ask for a JSON object (Groq JSON mode) and retry once if it can't be parsed
 async function completeJSON(prompt, temperature) {
   let lastError;
@@ -35,22 +49,29 @@ async function completeJSON(prompt, temperature) {
       });
       return parseJSON(completion.choices[0]?.message?.content);
     } catch (error) {
+      // API failures won't be fixed by an immediate retry; bad JSON might
+      if (error instanceof Groq.APIError) throw toAIError(error);
       lastError = error;
       console.warn(`AI JSON attempt ${attempt} failed:`, error.message);
     }
   }
-  throw lastError;
+  throw new HttpError(502, 'The AI returned an unreadable response. Please try again');
 }
 
 // Plain-text completion that never returns an empty string
 async function completeText(prompt, temperature) {
-  const completion = await groq.chat.completions.create({
-    messages: [{ role: 'user', content: prompt }],
-    model: MODEL,
-    temperature,
-  });
+  let completion;
+  try {
+    completion = await groq.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: MODEL,
+      temperature,
+    });
+  } catch (error) {
+    throw toAIError(error);
+  }
   const text = completion.choices[0]?.message?.content?.trim();
-  if (!text) throw new Error('AI returned an empty response');
+  if (!text) throw new HttpError(502, 'The AI returned an empty response. Please try again');
   return text;
 }
 

@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
 require('./config/env')();
+const { notFound, errorHandler } = require('./middleware/errorHandler');
 
 const authRoutes = require('./routes/auth');
 const resumeRoutes = require('./routes/resume');
@@ -21,7 +22,7 @@ app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -32,6 +33,10 @@ app.use('/api/interview', interviewRoutes);
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Must come after all routes
+app.use('/api', notFound);
+app.use(errorHandler);
 
 // Connect to MongoDB and start server
 const PORT = process.env.PORT || 5001;
