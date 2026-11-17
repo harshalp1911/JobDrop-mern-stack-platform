@@ -39,6 +39,14 @@ export default function Interview() {
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [micMuted, setMicMuted] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(0);
+  // Local time (ms) when the interview ends, derived from the server's
+  // "seconds remaining" so a wrong device clock doesn't skew the countdown
+  const deadlineRef = useRef(null);
+  const syncDeadline = (seconds) => {
+    if (typeof seconds !== 'number') return;
+    deadlineRef.current = Date.now() + seconds * 1000;
+    setTimeRemaining(seconds);
+  };
   const [started, setStarted] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [ended, setEnded] = useState(false);
@@ -53,6 +61,8 @@ export default function Interview() {
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
   const streamRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const captionClearRef = useRef(null);
 
   useEffect(() => { listeningRef.current = isListening; }, [isListening]);
   useEffect(() => { respondingRef.current = responding; }, [responding]);
@@ -86,25 +96,37 @@ export default function Interview() {
   useEffect(() => {
     if (!started || ended || !interview) return;
     const interval = setInterval(() => {
-      const elapsed = (Date.now() - new Date(interview.startedAt).getTime()) / 1000;
-      const remaining = Math.max(0, interview.duration * 60 - elapsed);
+      if (deadlineRef.current === null) return;
+      const remaining = Math.max(0, (deadlineRef.current - Date.now()) / 1000);
       setTimeRemaining(remaining);
       if (remaining <= 0) handleEndInterview();
     }, 1000);
     return () => clearInterval(interval);
   }, [started, ended, interview]);
 
-  // Cleanup
+  // Release the microphone, visualizer and audio context
+  const stopAudio = () => {
+    cancelAnimationFrame(animFrameRef.current);
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
+    setAudioLevel(0);
+  };
+
+  // Cleanup when leaving the page
   useEffect(() => {
     return () => {
-      recognitionRef.current?.stop();
+      // Clear the flag first: otherwise recognition.onend restarts the mic
+      // after the page is gone and it keeps listening on other pages.
+      listeningRef.current = false;
+      if (recognitionRef.current) recognitionRef.current.onend = null;
+      try { recognitionRef.current?.stop(); } catch (e) { /* ignore */ }
       window.speechSynthesis.cancel();
       clearTimeout(typingTimerRef.current);
       clearTimeout(silenceTimerRef.current);
-      cancelAnimationFrame(animFrameRef.current);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
+      clearTimeout(captionClearRef.current);
+      stopAudio();
     };
   }, []);
 
@@ -122,8 +144,7 @@ export default function Interview() {
         // "Rejoin" lobby instead of dropping the user into a silent session.
         setResuming(true);
         setMessages(data.conversation || []);
-        const elapsed = (Date.now() - new Date(data.startedAt).getTime()) / 1000;
-        setTimeRemaining(Math.max(0, data.duration * 60 - elapsed));
+        syncDeadline(res.data.remainingSeconds);
       }
     } catch (err) {
       console.error('Failed to fetch interview:', err);
@@ -134,10 +155,12 @@ export default function Interview() {
 
   // Audio visualizer for mic level
   const startAudioVisualizer = async () => {
+    if (streamRef.current) return; // already running
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
@@ -228,6 +251,8 @@ export default function Interview() {
   const typeCaption = (text) => {
     const words = text.split(' ');
     let index = 0;
+    clearTimeout(typingTimerRef.current);
+    clearTimeout(captionClearRef.current);
     setAiTypingCaption('');
     setAiCaption('');
 
@@ -239,7 +264,7 @@ export default function Interview() {
         typingTimerRef.current = setTimeout(tick, delay);
       } else {
         setAiCaption(text);
-        setTimeout(() => setAiCaption(''), 5000);
+        captionClearRef.current = setTimeout(() => setAiCaption(''), 5000);
         setAiTypingCaption('');
       }
     };
@@ -279,11 +304,11 @@ export default function Interview() {
     setLoading(true);
     try {
       const res = await API.post(`/interview/${id}/start`);
-      setInterview((prev) => ({
-        ...prev, status: 'in_progress', startedAt: new Date().toISOString(),
-      }));
+      const { startedAt, duration, remainingSeconds } = res.data.interview;
+      setInterview((prev) => ({ ...prev, status: 'in_progress', startedAt, duration }));
+      // Count down from the server's figure so the timer matches the limit it enforces
+      syncDeadline(remainingSeconds);
       setStarted(true);
-      setTimeRemaining(interview.duration * 60);
       setMessages([{ role: 'ai', content: res.data.message }]);
       startAudioVisualizer();
       // Speak AI greeting, then auto-start listening
@@ -342,7 +367,7 @@ export default function Interview() {
           setTimeout(() => navigate(`/interview/${id}/feedback`), 2000);
         });
       } else {
-        setTimeRemaining(res.data.timeRemaining * 60);
+        syncDeadline(res.data.remainingSeconds);
         speak(res.data.message, () => {
           if (!micMutedRef.current) startListening();
         });
@@ -388,11 +413,9 @@ export default function Interview() {
     window.speechSynthesis.cancel();
     clearTimeout(typingTimerRef.current);
     clearTimeout(silenceTimerRef.current);
+    clearTimeout(captionClearRef.current);
     setAiTypingCaption('');
-    cancelAnimationFrame(animFrameRef.current);
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-    }
+    stopAudio();
     try {
       await API.post(`/interview/${id}/end`);
       navigate(`/interview/${id}/feedback`);
