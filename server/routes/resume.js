@@ -1,6 +1,7 @@
 const express = require('express');
 const pdfParse = require('pdf-parse');
 const auth = require('../middleware/auth');
+const { heavyAiLimiter } = require('../middleware/rateLimit');
 const validateObjectId = require('../middleware/validateObjectId');
 const uploadResume = require('../config/multer');
 const Resume = require('../models/Resume');
@@ -10,7 +11,7 @@ const router = express.Router();
 router.param('id', validateObjectId);
 
 // Upload resume
-router.post('/upload', auth, uploadResume, async (req, res) => {
+router.post('/upload', auth, heavyAiLimiter, uploadResume, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'Please upload a PDF file' });
@@ -42,6 +43,7 @@ router.post('/upload', auth, uploadResume, async (req, res) => {
     res.status(201).json({
       message: 'Resume uploaded successfully',
       resume: {
+        _id: resume._id, // same key the list endpoint uses
         id: resume._id,
         fileName: resume.fileName,
         isAnalyzed: resume.isAnalyzed,
@@ -55,7 +57,7 @@ router.post('/upload', auth, uploadResume, async (req, res) => {
 });
 
 // Analyze resume with AI
-router.post('/:id/analyze', auth, async (req, res) => {
+router.post('/:id/analyze', auth, heavyAiLimiter, async (req, res) => {
   try {
     const resume = await Resume.findOne({ _id: req.params.id, user: req.user._id });
 

@@ -63,7 +63,7 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setResumes((prev) => [res.data.resume, ...prev]);
-      navigate(`/resume/${res.data.resume.id}`);
+      navigate(`/resume/${res.data.resume._id}`);
     } catch (err) {
       alert(err.response?.data?.message || 'Upload failed');
     } finally {
