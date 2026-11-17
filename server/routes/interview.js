@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const auth = require('../middleware/auth');
+const { aiLimiter, heavyAiLimiter } = require('../middleware/rateLimit');
 const Interview = require('../models/Interview');
 const Resume = require('../models/Resume');
 const validateObjectId = require('../middleware/validateObjectId');
@@ -22,6 +23,13 @@ const msRemaining = (interview) =>
     : interview.duration * 60 * 1000;
 
 const isTimeUp = (interview) => msRemaining(interview) <= TIME_UP_GRACE_MS;
+
+// Sent to the client so its countdown doesn't depend on the device clock
+const remainingSeconds = (interview) =>
+  interview.status === 'in_progress' ? Math.max(0, Math.round(msRemaining(interview) / 1000)) : null;
+
+// How long a respond request may hold the lock before it's considered stuck
+const RESPOND_LOCK_STALE_MS = 60 * 1000;
 
 const TIME_UP_MESSAGE = "We've run out of time. Thank you for the interview! Let me prepare your feedback.";
 
@@ -79,7 +87,7 @@ router.post('/create', auth, async (req, res) => {
 });
 
 // Start the interview - get the first AI message
-router.post('/:id/start', auth, async (req, res) => {
+router.post('/:id/start', auth, aiLimiter, async (req, res) => {
   try {
     const interview = await Interview.findOne({ _id: req.params.id, user: req.user._id });
     if (!interview) {
@@ -117,6 +125,7 @@ router.post('/:id/start', auth, async (req, res) => {
         id: interview._id,
         status: interview.status,
         startedAt: interview.startedAt,
+        remainingSeconds: remainingSeconds(interview),
         duration: interview.duration,
       },
     });
@@ -127,16 +136,38 @@ router.post('/:id/start', auth, async (req, res) => {
 });
 
 // Send user response and get next AI question
-router.post('/:id/respond', auth, async (req, res) => {
+router.post('/:id/respond', auth, aiLimiter, async (req, res) => {
+  const { userMessage } = req.body;
+
+  if (typeof userMessage !== 'string' || !userMessage.trim()) {
+    return res.status(400).json({ message: 'Response is required' });
+  }
+
+  let interview;
   try {
-    const { userMessage } = req.body;
+    // Take a per-interview lock atomically so two answers sent at the same
+    // moment can't both be processed (duplicate messages, double AI calls).
+    // A lock older than RESPOND_LOCK_STALE_MS is treated as abandoned.
+    interview = await Interview.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        user: req.user._id,
+        status: 'in_progress',
+        $or: [
+          { respondingSince: null },
+          { respondingSince: { $lt: new Date(Date.now() - RESPOND_LOCK_STALE_MS) } },
+        ],
+      },
+      { $set: { respondingSince: new Date() } },
+      { new: true }
+    );
 
-    if (typeof userMessage !== 'string' || !userMessage.trim()) {
-      return res.status(400).json({ message: 'Response is required' });
-    }
-
-    const interview = await Interview.findOne({ _id: req.params.id, user: req.user._id });
-    if (!interview || interview.status !== 'in_progress') {
+    if (!interview) {
+      const existing = await Interview.findOne({ _id: req.params.id, user: req.user._id })
+        .select('status');
+      if (existing?.status === 'in_progress') {
+        return res.status(409).json({ message: 'Still working on your previous answer' });
+      }
       return res.status(400).json({ message: 'Interview not found or not in progress' });
     }
 
@@ -156,6 +187,7 @@ router.post('/:id/respond', auth, async (req, res) => {
       interview.conversation.push({ role: 'ai', content: TIME_UP_MESSAGE });
       interview.status = 'completed';
       interview.endedAt = new Date();
+      interview.respondingSince = null;
       await interview.save();
 
       return res.json({
@@ -180,6 +212,7 @@ router.post('/:id/respond', auth, async (req, res) => {
       role: 'ai',
       content: aiResponse,
     });
+    interview.respondingSince = null;
 
     await interview.save();
 
@@ -187,10 +220,20 @@ router.post('/:id/respond', auth, async (req, res) => {
       message: aiResponse,
       isComplete: false,
       timeRemaining: Math.round(timeRemaining),
+      remainingSeconds: remainingSeconds(interview),
     });
   } catch (error) {
     console.error('Respond error:', error);
     res.status(500).json({ message: 'Failed to process response' });
+  } finally {
+    // Always release the lock if this request still holds it (error paths,
+    // early returns). Nothing was saved on failure, so the user can retry.
+    if (interview?.respondingSince) {
+      await Interview.updateOne(
+        { _id: interview._id, respondingSince: interview.respondingSince },
+        { $set: { respondingSince: null } }
+      ).catch((err) => console.error('Failed to release respond lock:', err));
+    }
   }
 });
 
@@ -223,7 +266,7 @@ router.post('/:id/end', auth, async (req, res) => {
 });
 
 // Generate feedback for completed interview
-router.post('/:id/feedback', auth, async (req, res) => {
+router.post('/:id/feedback', auth, heavyAiLimiter, async (req, res) => {
   try {
     const interview = await Interview.findOne({ _id: req.params.id, user: req.user._id });
     if (!interview) {
@@ -277,7 +320,7 @@ router.get('/:id', auth, async (req, res) => {
       return res.status(404).json({ message: 'Interview not found' });
     }
 
-    res.json({ interview });
+    res.json({ interview, remainingSeconds: remainingSeconds(interview) });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }

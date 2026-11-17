@@ -57,6 +57,11 @@ const interviewSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  // Set while an answer is being processed; prevents concurrent /respond calls
+  respondingSince: {
+    type: Date,
+    default: null,
+  },
   feedback: {
     overallScore: { type: Number, default: 0 },
     technicalScore: { type: Number, default: 0 },
