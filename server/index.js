@@ -2,12 +2,19 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config();
+require('./config/env')();
 
 const authRoutes = require('./routes/auth');
 const resumeRoutes = require('./routes/resume');
 const interviewRoutes = require('./routes/interview');
 
 const app = express();
+
+// Behind a hosting proxy (Render, Railway, etc.) set TRUST_PROXY=1 so rate
+// limiting sees the real client IP. Leave unset locally.
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
+}
 
 // Middleware
 app.use(cors({
