@@ -3,7 +3,7 @@
 require('dotenv').config();
 const Groq = require('groq-sdk');
 
-const MODEL = 'llama-3.3-70b-versatile'; // keep in sync with services/ai.js
+const { GROQ_MODEL: MODEL } = require('../config/ai');
 
 async function main() {
   if (!process.env.GROQ_API_KEY) {

@@ -5,7 +5,7 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-const MODEL = 'llama-3.3-70b-versatile';
+const { GROQ_MODEL: MODEL } = require('../config/ai');
 
 // Helper to extract JSON from AI responses that may contain markdown code blocks
 function parseJSON(text) {

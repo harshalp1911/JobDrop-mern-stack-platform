@@ -20,7 +20,7 @@ JobDrop helps you practice job interviews with an AI interviewer that knows your
 | Frontend | React 18, Vite, Tailwind CSS, React Router, Axios, Lucide icons |
 | Backend | Node.js, Express, Multer, pdf-parse, express-rate-limit |
 | Database | MongoDB with Mongoose (TTL indexes for automatic deletion) |
-| AI | [Groq](https://groq.com) API running Llama 3.3 70B (`llama-3.3-70b-versatile`) |
+| AI | [Groq](https://groq.com) API running GPT-OSS 120B (`openai/gpt-oss-120b`), configurable with `GROQ_MODEL` |
 | Auth | JWT, bcrypt, Google OAuth 2.0 |
 | Speech | Web Speech API (`SpeechRecognition` and `speechSynthesis`) |
 
@@ -50,6 +50,7 @@ PORT=5001
 MONGODB_URI=mongodb://localhost:27017/jobdrop
 JWT_SECRET=a_long_random_string_of_at_least_32_characters
 GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=openai/gpt-oss-120b      # optional, this is the default
 GOOGLE_CLIENT_ID=your_google_client_id   # optional
 CLIENT_URL=http://localhost:5173
 # TRUST_PROXY=1                          # set when deployed behind a proxy
